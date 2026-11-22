@@ -1,11 +1,14 @@
 
-name: Plugin Builder
+name: GreenLemon Universal Plugin Builder
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - '**.zip'
+      - '*.zip'
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -21,32 +24,52 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Install Build Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip
+          sudo apt-get install -y gradle maven
+
       - name: Extract ZIPs
         run: |
-          mkdir -p projects
+          mkdir -p projects output reports
           for f in *.zip; do
             [ -f "$f" ] || continue
             name="${f%.zip}"
             mkdir -p "projects/$name"
-            unzip -q "$f" -d "projects/$name"
+            unzip -oq "$f" -d "projects/$name"
           done
 
-      - name: Build plugins
+      - name: Build All Projects
         run: |
-          find projects -type f -name gradlew -exec chmod +x {} \;
-          find projects -type f -name gradlew -execdir bash -c './gradlew build --no-daemon' \;
-          find projects -type f -name mvnw -exec chmod +x {} \;
-          find projects -type f -name mvnw -execdir bash -c './mvnw package -DskipTests' \;
+          find projects -type f \( -name build.gradle -o -name build.gradle.kts \) -print0 |
+          while IFS= read -r -d '' file; do
+            dir=$(dirname "$file")
+            echo "Building Gradle: $dir"
+            (cd "$dir" && gradle build --no-daemon) || echo "FAILED: $dir" >> reports/failed.txt
+          done
+
+          find projects -type f -name pom.xml -print0 |
+          while IFS= read -r -d '' file; do
+            dir=$(dirname "$file")
+            echo "Building Maven: $dir"
+            (cd "$dir" && mvn package -DskipTests) || echo "FAILED: $dir" >> reports/failed.txt
+          done
 
       - name: Collect JARs
         run: |
-          mkdir -p output
-          find projects -type f -path '*/build/libs/*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' -exec cp {} output/ \;
-          find projects -type f -path '*/target/*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' -exec cp {} output/ \;
+          find projects -type f -name '*.jar' \
+            ! -name '*-sources.jar' \
+            ! -name '*-javadoc.jar' \
+            -exec cp -n {} output/ \;
 
-      - name: Upload JARs
+      - name: Upload Results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Plugin-JARs
-          path: output/*.jar
+          name: GreenLemon-Build-Results
+          path: |
+            output/
+            reports/
+          if-no-files-found: warn
           
